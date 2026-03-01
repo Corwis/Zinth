@@ -29,9 +29,9 @@ if (!file(".git").exists()) {
     error(errorText)
 }
 
-rootProject.name = "paper"
+rootProject.name = "zinth"
 
-for (name in listOf("paper-api", "paper-server")) {
+for (name in listOf("zinth-api", "zinth-server")) {
     include(name)
     file(name).mkdirs()
 }
