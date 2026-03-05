@@ -3,21 +3,27 @@ package net.zanoria.zinth;
 import net.zanoria.zinth.api.ZinthServices;
 import net.zanoria.zinth.combat.CombatTracker;
 import net.zanoria.zinth.evidence.EvidenceManager;
+import net.zanoria.zinth.packet.PacketBus;
 import net.zanoria.zinth.perf.PerfSampler;
+import net.zanoria.zinth.shadow.ShadowManager;
 import net.zanoria.zinth.snapshot.SnapshotManager;
+
+import java.util.UUID;
 
 /**
  * Central entry point for Zinth.
- * Started and stopped by the server lifecycle - no plugin involved.
+ * Started and stopped by MinecraftServer — no plugin involved.
  */
 public final class Zinth {
 
     private static Zinth instance;
 
     private final SnapshotManager snapshotManager = new SnapshotManager();
-    private final CombatTracker combatTracker     = new CombatTracker();
-    private final PerfSampler perfSampler         = new PerfSampler();
+    private final CombatTracker   combatTracker   = new CombatTracker();
+    private final PerfSampler     perfSampler     = new PerfSampler();
     private final EvidenceManager evidenceManager = new EvidenceManager();
+    private final PacketBus       packetBus       = new PacketBus();
+    private final ShadowManager   shadowManager   = new ShadowManager();
 
     private Zinth() {}
 
@@ -43,7 +49,7 @@ public final class Zinth {
         combatTracker.enable();
         perfSampler.enable();
         evidenceManager.enable();
-        ZinthServices.init(snapshotManager, combatTracker, perfSampler, evidenceManager);
+        ZinthServices.init(snapshotManager, combatTracker, perfSampler, evidenceManager, packetBus, shadowManager);
     }
 
     private void disable() {
@@ -54,25 +60,31 @@ public final class Zinth {
     }
 
     // -------------------------------------------------------------------------
-    // Tick - called from MinecraftServer.tick() via NMS patch
+    // Tick — called from MinecraftServer.tickServer()
     // -------------------------------------------------------------------------
-
-    public void onPlayerJoin(java.util.UUID playerId) {
-        evidenceManager.onPlayerJoin(playerId);
-    }
-
-    public void onPlayerQuit(java.util.UUID playerId) {
-        snapshotManager.onPlayerQuit(playerId);
-        combatTracker.onPlayerQuit(playerId);
-        evidenceManager.onPlayerQuit(playerId);
-    }
 
     public void tick() {
         perfSampler.tickStart();
         snapshotManager.tick();
         combatTracker.tick();
         evidenceManager.tick();
+        packetBus.flushQueue();
         perfSampler.tickEnd();
+    }
+
+    // -------------------------------------------------------------------------
+    // Player lifecycle
+    // -------------------------------------------------------------------------
+
+    public void onPlayerJoin(UUID playerId) {
+        evidenceManager.onPlayerJoin(playerId);
+    }
+
+    public void onPlayerQuit(UUID playerId) {
+        snapshotManager.onPlayerQuit(playerId);
+        combatTracker.onPlayerQuit(playerId);
+        evidenceManager.onPlayerQuit(playerId);
+        shadowManager.onPlayerQuit(playerId);
     }
 
     // -------------------------------------------------------------------------
@@ -80,7 +92,9 @@ public final class Zinth {
     // -------------------------------------------------------------------------
 
     public SnapshotManager snapshotManager() { return snapshotManager; }
-    public CombatTracker combatTracker()     { return combatTracker; }
-    public PerfSampler perfSampler()         { return perfSampler; }
+    public CombatTracker   combatTracker()   { return combatTracker; }
+    public PerfSampler     perfSampler()     { return perfSampler; }
     public EvidenceManager evidenceManager() { return evidenceManager; }
+    public PacketBus       packetBus()       { return packetBus; }
+    public ShadowManager   shadowManager()   { return shadowManager; }
 }
