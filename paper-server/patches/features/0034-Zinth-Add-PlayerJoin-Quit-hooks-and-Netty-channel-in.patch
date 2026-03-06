@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Zinth Dev <dev@zanoria.net>
+Date: Fri, 6 Mar 2026 13:41:36 +0100
+Subject: [PATCH] Zinth: Add PlayerJoin/Quit hooks and Netty channel injection
+
+
+diff --git a/net/minecraft/server/players/PlayerList.java b/net/minecraft/server/players/PlayerList.java
+index 1fb28bd25e93e14c9b606338a657902d292ff1a8..b34b5a8671546dda2a7876b688e7cc63ec233fa3 100644
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -239,6 +239,9 @@ public abstract class PlayerList {
+ 
+         org.bukkit.event.player.PlayerJoinEvent playerJoinEvent = new org.bukkit.event.player.PlayerJoinEvent(bukkitPlayer, io.papermc.paper.adventure.PaperAdventure.asAdventure(mutableComponent)); // Paper - Adventure
+         this.cserver.getPluginManager().callEvent(playerJoinEvent);
++        net.zanoria.zinth.Zinth.get().onPlayerJoin(player.getUUID()); // Zinth
++        net.zanoria.zinth.packet.impl.ZinthChannelInitializer.inject(
++            player.connection.connection.channel, player.getUUID()); // Zinth - inject packet handler
+ 
+         if (!player.connection.isAcceptingMessages()) {
+             return;
+@@ -442,7 +445,8 @@ public abstract class PlayerList {
+         org.bukkit.event.player.PlayerQuitEvent playerQuitEvent = new org.bukkit.event.player.PlayerQuitEvent(player.getBukkitEntity(), leaveMessage, player.quitReason); // Paper - Adventure & Add API for quit reason
+         this.cserver.getPluginManager().callEvent(playerQuitEvent);
+         net.zanoria.zinth.Zinth.get().onPlayerQuit(player.getUUID()); // Zinth
+-        player.getBukkitEntity().disconnect();
++        net.zanoria.zinth.packet.impl.ZinthChannelInitializer.uninject(
++            player.connection.connection.channel); // Zinth - remove packet handler
+ 
+         if (this.server.isSameThread()) player.doTick(); // SPIGOT-924 // Paper - Improved watchdog support; don't tick during emergency shutdowns
+         // CraftBukkit end
