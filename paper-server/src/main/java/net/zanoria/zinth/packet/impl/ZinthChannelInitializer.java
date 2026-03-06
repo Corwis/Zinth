@@ -2,33 +2,42 @@ package net.zanoria.zinth.packet.impl;
 
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPipeline;
+import net.zanoria.zinth.exploit.ExploitGuard;
+import net.zanoria.zinth.exploit.ExploitProtection;
 
 import java.util.UUID;
 
 /**
- * Injects ZinthChannelHandler into the Netty pipeline for a player.
- * Called from PlayerList when the connection is established.
+ * Injects Zinth handlers into the Netty pipeline for a player.
+ * Order: ExploitGuard (before decoder) → ZinthChannelHandler (after decoder)
  */
 public final class ZinthChannelInitializer {
 
     private ZinthChannelInitializer() {}
 
-    /**
-     * Call this on the Netty thread when a player's channel is ready.
-     * Inserts Zinth's handler before the packet decoder.
-     */
     public static void inject(Channel channel, UUID playerId) {
         ChannelPipeline pipeline = channel.pipeline();
-        if (pipeline.get(ZinthChannelHandler.HANDLER_NAME) != null) return;
-        pipeline.addBefore("packet_handler", ZinthChannelHandler.HANDLER_NAME,
-            new ZinthChannelHandler(playerId));
+
+        // ExploitGuard sits BEFORE the packet decoder
+        if (pipeline.get(ExploitProtection.HANDLER_NAME) == null) {
+            pipeline.addBefore("decoder", ExploitProtection.HANDLER_NAME,
+                new ExploitGuard(playerId));
+        }
+
+        // ZinthChannelHandler sits AFTER the decoder (decoded packets)
+        if (pipeline.get(ZinthChannelHandler.HANDLER_NAME) == null) {
+            pipeline.addBefore("packet_handler", ZinthChannelHandler.HANDLER_NAME,
+                new ZinthChannelHandler(playerId));
+        }
     }
 
-    /**
-     * Remove Zinth's handler from the pipeline on disconnect.
-     */
     public static void uninject(Channel channel) {
         ChannelPipeline pipeline = channel.pipeline();
+
+        if (pipeline.get(ExploitProtection.HANDLER_NAME) != null) {
+            pipeline.remove(ExploitProtection.HANDLER_NAME);
+        }
+
         if (pipeline.get(ZinthChannelHandler.HANDLER_NAME) != null) {
             pipeline.remove(ZinthChannelHandler.HANDLER_NAME);
         }
