@@ -50,9 +50,15 @@ public final class Zinth {
         perfSampler.enable();
         evidenceManager.enable();
         ZinthServices.init(snapshotManager, combatTracker, perfSampler, evidenceManager, packetBus, shadowManager);
+        // Publish services into the Bukkit ServicesManager so plugins can reach the
+        // live managers across the plugin/server class-loader boundary (the static
+        // ZinthServices holder is not visible to plugins). boot() runs after plugins
+        // are enabled, so Bukkit + the ServicesManager are available here.
+        ZinthServiceRegistrar.register(this);
     }
 
     private void disable() {
+        ZinthServiceRegistrar.unregister();
         evidenceManager.disable();
         perfSampler.disable();
         combatTracker.disable();
