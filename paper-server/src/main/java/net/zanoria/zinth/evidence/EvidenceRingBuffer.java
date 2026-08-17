@@ -2,8 +2,11 @@ package net.zanoria.zinth.evidence;
 
 import net.zanoria.zinth.snapshot.PlayerSnapshot;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /**
  * Fixed-size ring buffer storing recent evidence entries for one player.
@@ -25,14 +28,21 @@ public final class EvidenceRingBuffer {
     // -------------------------------------------------------------------------
 
     private final UUID playerId;
-    private final Entry[] buffer;
+    private final AtomicReferenceArray<Entry> buffer;
     private final int capacity;
-    private final AtomicInteger writeIndex = new AtomicInteger(0);
+
+    /**
+     * Total writes ever, not an index. A {@code long} because an {@code int} counter wraps
+     * negative after ~2.1 billion writes and {@code negative % capacity} is negative — which
+     * would have turned into an ArrayIndexOutOfBoundsException inside the tick loop on a
+     * long-lived server.
+     */
+    private final AtomicLong writeCount = new AtomicLong(0);
 
     public EvidenceRingBuffer(UUID playerId, int capacity) {
         this.playerId = playerId;
         this.capacity = capacity;
-        this.buffer = new Entry[capacity];
+        this.buffer = new AtomicReferenceArray<>(capacity);
     }
 
     public EvidenceRingBuffer(UUID playerId) {
@@ -56,8 +66,8 @@ public final class EvidenceRingBuffer {
     }
 
     private void write(Entry entry) {
-        int idx = writeIndex.getAndIncrement() % capacity;
-        buffer[idx] = entry;
+        long seq = writeCount.getAndIncrement();
+        buffer.set((int) Math.floorMod(seq, capacity), entry);
     }
 
     // -------------------------------------------------------------------------
@@ -65,15 +75,24 @@ public final class EvidenceRingBuffer {
     // -------------------------------------------------------------------------
 
     /**
-     * Returns a snapshot of all non-null entries in insertion order.
-     * Allocates - only call when building a dump.
+     * Returns the retained entries in insertion order, oldest first.
+     * Allocates — only call when building a dump.
      */
-    public Entry[] drain() {
-        Entry[] copy = new Entry[capacity];
-        System.arraycopy(buffer, 0, copy, 0, capacity);
-        return copy;
+    public List<Entry> drain() {
+        long written = writeCount.get();
+        int size = (int) Math.min(written, capacity);
+        List<Entry> out = new ArrayList<>(size);
+        // Oldest retained write is (written - size); walk forward from there.
+        for (long seq = written - size; seq < written; seq++) {
+            Entry e = buffer.get((int) Math.floorMod(seq, capacity));
+            if (e != null) out.add(e);
+        }
+        return out;
     }
 
     public UUID playerId() { return playerId; }
     public int capacity()  { return capacity; }
+
+    /** Entries currently retained. */
+    public int size() { return (int) Math.min(writeCount.get(), capacity); }
 }

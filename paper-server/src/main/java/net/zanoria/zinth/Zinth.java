@@ -42,6 +42,32 @@ public final class Zinth {
         return instance;
     }
 
+    // -------------------------------------------------------------------------
+    // Null-safe entry points for the NMS hook sites
+    //
+    // The hook sites must never throw. Shutdown proved why: Zinth.shutdown() used to run
+    // twelve lines before playerList.removeAll(), so stopping a server with a player online
+    // put an IllegalStateException from Zinth.get() straight through stopServer() — and the
+    // worlds were never saved. Ordering is fixed below; these entry points make sure a future
+    // reordering costs nothing.
+    // -------------------------------------------------------------------------
+
+    public static void playerJoined(UUID playerId) {
+        Zinth zinth = instance;
+        if (zinth != null) zinth.onPlayerJoin(playerId);
+    }
+
+    public static void playerQuit(UUID playerId) {
+        Zinth zinth = instance;
+        if (zinth != null) zinth.onPlayerQuit(playerId);
+    }
+
+    /** Called every server tick. Does nothing before boot and after shutdown. */
+    public static void tickNow() {
+        Zinth zinth = instance;
+        if (zinth != null) zinth.tick();
+    }
+
     private void enable() {
         snapshotManager.enable();
         combatTracker.enable();
@@ -52,11 +78,31 @@ public final class Zinth {
         // live managers across the plugin/server class-loader boundary (the static
         // ZinthServices holder is not visible to plugins). boot() runs after plugins
         // are enabled, so Bukkit + the ServicesManager are available here.
-        ZinthServiceRegistrar.register(this);
+        ZinthServiceRegistrar.register(snapshotManager, combatTracker, perfSampler, evidenceManager, packetBus);
+        registerCommand();
+    }
+
+    /**
+     * Registers {@code /zinth}. Late registration (boot runs after plugins are enabled) is fine
+     * for the console, which is where this is used; {@code syncCommands} pushes it to clients
+     * that connect afterwards.
+     */
+    private void registerCommand() {
+        try {
+            org.bukkit.craftbukkit.CraftServer server = (org.bukkit.craftbukkit.CraftServer) org.bukkit.Bukkit.getServer();
+            server.getCommandMap().register("zinth", "Zinth", new net.zanoria.zinth.command.ZinthCommand());
+            server.syncCommands();
+        } catch (Throwable t) {
+            java.util.logging.Logger.getLogger("Zinth")
+                .warning("[Zinth] could not register /zinth: " + t);
+        }
     }
 
     private void disable() {
         ZinthServiceRegistrar.unregister();
+        // Clear the holder before the managers go down: the NMS hook sites read it on every
+        // damage event and must see "not booted" rather than a half-torn-down manager.
+        ZinthServices.clear();
         evidenceManager.disable();
         perfSampler.disable();
         combatTracker.disable();
@@ -68,11 +114,19 @@ public final class Zinth {
     // -------------------------------------------------------------------------
 
     public void tick() {
-        perfSampler.tickStart();
-        snapshotManager.tick();
-        combatTracker.tick();
-        evidenceManager.tick();
-        packetBus.flushQueue();
+        perfSampler.tick();
+        try {
+            snapshotManager.tick();
+            combatTracker.tick();
+            evidenceManager.tick();
+            packetBus.flushQueue();
+        } catch (Throwable t) {
+            // Zinth.tick() is called bare from MinecraftServer.tickServer(); anything escaping
+            // here stops the server. Loud, with the stack, but never fatal — the sampling this
+            // does is worth less than the tick loop. Standing Rule 2: reported, not swallowed.
+            java.util.logging.Logger.getLogger("Zinth").log(
+                java.util.logging.Level.SEVERE, "[Zinth] tick failed — services may be stale", t);
+        }
         perfSampler.tickEnd();
     }
 

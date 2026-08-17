@@ -258,6 +258,10 @@ tasks.test {
         excludeTags("Slow")
     }
 
+    // ZinthWiringTest checks the two source trees for duplicated fully-qualified names.
+    // The task runs in a temporary directory, so it needs the repository root handed to it.
+    systemProperty("zinth.repoRoot", rootProject.layout.projectDirectory.asFile.absolutePath)
+
     // Configure mockito agent that is needed in newer java versions
     val provider = objects.newInstance<MockitoAgentProvider>()
     provider.fileCollection.from(mockitoAgent)
@@ -274,6 +278,13 @@ sourceSets {
     main {
         java {
             srcDir(generatedDir)
+            // Zinth's public API has exactly one definition, and it lives in :zinth-api.
+            // It is compiled *into the server jar* rather than depended on, because the
+            // paperclip/bundler pipeline ships only paper-server's own output — a project
+            // dependency would resolve at compile time and then be missing at runtime.
+            // Plugins compile against the published net.zanoria:zinth-api jar, which is
+            // built from these same sources, so the two can no longer drift apart.
+            srcDir(rootProject.layout.projectDirectory.dir("zinth-api/src/main/java"))
         }
     }
 }

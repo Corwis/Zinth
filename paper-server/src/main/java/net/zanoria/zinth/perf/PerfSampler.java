@@ -1,73 +1,81 @@
 package net.zanoria.zinth.perf;
 
-import org.bukkit.Bukkit;
-import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitTask;
+import ca.spottedleaf.moonrise.common.time.TickData;
+import net.minecraft.server.MinecraftServer;
 
 /**
- * Measures MSPT each tick and maintains a 5-second rolling average.
- * Tick-start and tick-end are recorded to compute actual tick duration.
+ * Reports the real server MSPT.
  *
- * Threading: main thread only.
+ * <p>It measures nothing itself. The previous implementation bracketed
+ * {@code Zinth.tick()} with {@code System.nanoTime()} — a span of a few hundred microseconds
+ * containing four Zinth managers — and then compared it against {@link TickBudget}'s
+ * thresholds, which are whole-server MSPT thresholds. The result was structurally incapable
+ * of leaving {@code GREEN}, so every consumer gating on it was gating on a constant.
+ *
+ * <p>What it reports now is the value the server already records at the end of every tick and
+ * that {@code /mspt} and {@code Bukkit.getAverageTickTime()} both read: tick length plus the
+ * task execution that happens between ticks. Zinth therefore agrees with every other
+ * performance readout on the box instead of contradicting them.
+ *
+ * <p>Threading: {@link #tick()} runs on the main thread. The getters read volatile fields and
+ * are safe from any thread — which matters, because plugins poll them off-tick.
  */
 public final class PerfSampler implements PerfService {
 
-    private static final int SAMPLE_SIZE = 100; // 5s at 20 TPS
-
-    private final long[] samples = new long[SAMPLE_SIZE];
-    private int index = 0;
-    private int filled = 0;
-
-    private long tickStart = 0L;
     private volatile double currentMspt = 0.0;
-    private volatile double avgMspt = 0.0;
-    private volatile TickBudget budget = TickBudget.GREEN;
+    private volatile double avgMspt     = 0.0;
+    private volatile double zinthMspt   = 0.0;
+    private volatile TickBudget budget  = TickBudget.GREEN;
 
-    private BukkitTask tickTask;
-
-    // -------------------------------------------------------------------------
-    // Lifecycle
-    // -------------------------------------------------------------------------
+    private long zinthTickStart = 0L;
 
     public void enable() {
-        // tick() is called directly from Zinth.tick()
+        // Sampled from Zinth.tick(); nothing to arm.
     }
 
     public void disable() {
-        if (tickTask != null) { tickTask.cancel(); tickTask = null; }
+        currentMspt = 0.0;
+        avgMspt     = 0.0;
+        zinthMspt   = 0.0;
+        budget      = TickBudget.GREEN;
     }
 
-    // -------------------------------------------------------------------------
-    // Tick hooks — called by ZinthTickOrchestrator
-    // -------------------------------------------------------------------------
+    /**
+     * Samples the tick that just finished, then starts measuring Zinth's own slice of this one.
+     *
+     * <p>Called first in {@code Zinth.tick()}. The newest entry available is the previous tick:
+     * the server records a tick only after {@code tickServer()} returns, and Zinth's hook sits
+     * inside it. One tick of lag is irrelevant for a load gate.
+     */
+    public void tick() {
+        zinthTickStart = System.nanoTime();
 
-    /** Call at the very start of the Zinth tick. */
-    public void tickStart() {
-        tickStart = System.nanoTime();
+        MinecraftServer server = MinecraftServer.getServer();
+        if (server == null) return; // pre-boot
+
+        TickData.MSPTData data = server.getMSPTData5s();
+        if (data == null) return; // no tick recorded yet
+
+        long[] raw = data.rawData(); // nanos, newest last
+        if (raw.length > 0) {
+            currentMspt = raw[raw.length - 1] / 1_000_000.0;
+        }
+        double avg = data.avg(); // already millis
+        avgMspt = avg;
+        budget  = TickBudget.of(avg);
     }
 
-    /** Call at the very end of the Zinth tick. */
+    /**
+     * Closes the measurement of Zinth's own cost for this tick. Called last in
+     * {@code Zinth.tick()}.
+     *
+     * <p>This is the number the old {@code currentMspt()} was actually returning. It is worth
+     * keeping — it is how much of the tick Zinth itself spends — but it is not the server's
+     * MSPT and must never be compared against {@link TickBudget}.
+     */
     public void tickEnd() {
-        if (tickStart == 0L) return;
-        long elapsed = System.nanoTime() - tickStart;
-        double mspt = elapsed / 1_000_000.0;
-
-        currentMspt = mspt;
-        samples[index] = elapsed;
-        index = (index + 1) % SAMPLE_SIZE;
-        if (filled < SAMPLE_SIZE) filled++;
-
-        // Recompute rolling average
-        long sum = 0L;
-        for (int i = 0; i < filled; i++) sum += samples[i];
-        avgMspt = (sum / (double) filled) / 1_000_000.0;
-
-        budget = TickBudget.of(avgMspt);
-    }
-
-    private void onTick() {
-        // Standalone mode: measure full tick duration
-        tickStart();
+        if (zinthTickStart == 0L) return;
+        zinthMspt = (System.nanoTime() - zinthTickStart) / 1_000_000.0;
     }
 
     // -------------------------------------------------------------------------
@@ -82,4 +90,7 @@ public final class PerfSampler implements PerfService {
 
     @Override
     public TickBudget budgetLevel() { return budget; }
+
+    @Override
+    public double zinthOverheadMspt() { return zinthMspt; }
 }

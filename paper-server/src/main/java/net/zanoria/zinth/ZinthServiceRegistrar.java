@@ -2,6 +2,7 @@ package net.zanoria.zinth;
 
 import net.zanoria.zinth.combat.CombatService;
 import net.zanoria.zinth.evidence.EvidenceService;
+import net.zanoria.zinth.packet.IPacketBus;
 import net.zanoria.zinth.packet.PacketBus;
 import net.zanoria.zinth.perf.PerfService;
 import net.zanoria.zinth.snapshot.SnapshotService;
@@ -36,21 +37,42 @@ final class ZinthServiceRegistrar {
 
     private ZinthServiceRegistrar() {}
 
-    static void register(Zinth zinth) {
+    /**
+     * Takes the services rather than the {@link Zinth} instance so the registration set can be
+     * asserted in a unit test — see {@code ZinthWiringTest}. The concrete-class key below is
+     * the sort of thing that disappears in a refactor without anything turning red.
+     */
+    static void register(
+        SnapshotService snapshots,
+        CombatService combat,
+        PerfService perf,
+        EvidenceService evidence,
+        PacketBus bus
+    ) {
         try {
             ServicesManager sm = Bukkit.getServicesManager();
             Plugin plugin = owner();
-            sm.register(SnapshotService.class, zinth.snapshotManager(), plugin, ServicePriority.Normal);
-            sm.register(CombatService.class,   zinth.combatTracker(),   plugin, ServicePriority.Normal);
-            sm.register(PerfService.class,     zinth.perfSampler(),     plugin, ServicePriority.Normal);
-            sm.register(EvidenceService.class, zinth.evidenceManager(), plugin, ServicePriority.Normal);
-            sm.register(PacketBus.class,       zinth.packetBus(),       plugin, ServicePriority.Normal);
-            LOG.info("[Zinth] Registered 5 services in Bukkit ServicesManager (owner=Zinth).");
+
+            sm.register(SnapshotService.class, snapshots, plugin, ServicePriority.Normal);
+            sm.register(CombatService.class,   combat,    plugin, ServicePriority.Normal);
+            sm.register(PerfService.class,     perf,      plugin, ServicePriority.Normal);
+            sm.register(EvidenceService.class, evidence,  plugin, ServicePriority.Normal);
+            sm.register(IPacketBus.class,      bus,       plugin, ServicePriority.Normal);
+            // Compatibility key. The packet bus predates IPacketBus and existing readers —
+            // notably the Combat Coach, which cannot compile against zinth-api at all — look
+            // it up reflectively under the concrete class. Dropping this key would not fail
+            // any build or test; it would make those readers silently fall back. Keep it.
+            sm.register(PacketBus.class,       bus,       plugin, ServicePriority.Normal);
+
+            LOG.info("[Zinth] Registered " + REGISTERED_KEYS + " service keys in Bukkit ServicesManager (owner=Zinth).");
         } catch (Throwable t) {
             // Never let a registration problem take down the server tick loop.
             LOG.warning("[Zinth] Failed to register services in ServicesManager: " + t);
         }
     }
+
+    /** Number of keys {@link #register} publishes. Asserted by ZinthWiringTest. */
+    static final int REGISTERED_KEYS = 6;
 
     static void unregister() {
         try {

@@ -55,6 +55,12 @@ public final class EvidenceManager implements EvidenceService {
         buffer(playerId).captureVelocity(velX, velY, velZ, tick);
     }
 
+    /** Entries currently retained for a player, or -1 if no buffer exists. Diagnostics and tests. */
+    public int bufferedEntries(UUID playerId) {
+        EvidenceRingBuffer buf = buffers.get(playerId);
+        return buf == null ? -1 : buf.size();
+    }
+
     @Override
     public void dump(UUID playerId, String reason, String meta) {
         EvidenceRingBuffer buf = buffers.get(playerId);

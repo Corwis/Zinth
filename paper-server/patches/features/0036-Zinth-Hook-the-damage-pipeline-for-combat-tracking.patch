@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Zinth Dev <dev@zanoria.net>
+Date: Sun, 16 Aug 2026 19:30:29 +0200
+Subject: [PATCH] Zinth: Hook the damage pipeline for combat tracking
+
+CombatTracker's only write path was an @EventHandler on EntityDamageByEntityEvent.
+Zinth is not a plugin and has no Plugin instance to register a listener against,
+so the handler never fired and CombatService returned null for every player since
+it was written. A fork does not need Bukkit events for its own bookkeeping - it
+sits below them. These two hooks sit at the points where the outcome is already
+decided: after actuallyHurt returned true (damage real, Bukkit event not cancelled)
+and after setDeltaMovement (knockback event not cancelled).
+
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 6f49b5e5888a6296b929e465a5ef87dc49bd4516..174615f2c7b1282d0820ed5477cd8bc0b5d8fd9d 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -1499,6 +1499,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+                 this.hurtTime = this.hurtDuration;
+             }
+ 
++            net.zanoria.zinth.combat.ZinthCombatHooks.onDamageApplied(this, damageSource); // Zinth - combat tracking; earliest point at which the hit is known to be real (every early return skipped, actuallyHurt returned true, Bukkit event not cancelled)
+             this.resolveMobResponsibleForDamage(damageSource);
+             this.resolvePlayerResponsibleForDamage(damageSource);
+             if (flag1) {
+@@ -2113,6 +2114,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+ 
+             this.needsSync = true;
+             this.setDeltaMovement(deltaMovement.add(event.getKnockback().getX(), event.getKnockback().getY(), event.getKnockback().getZ())); // Paper - knockback events
++            net.zanoria.zinth.combat.ZinthCombatHooks.onKnockbackApplied(this); // Zinth - knockback verification; velocity is written by the line above, so reaching here proves it was not cancelled
+             // CraftBukkit end
+         }
+     }

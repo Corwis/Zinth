@@ -1,26 +1,23 @@
 package net.zanoria.zinth.combat;
 
 import org.bukkit.Bukkit;
-import org.bukkit.entity.Entity;
-import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.EventPriority;
-import org.bukkit.event.Listener;
-import org.bukkit.event.entity.EntityDamageByEntityEvent;
-import org.bukkit.event.player.PlayerQuitEvent;
-import org.bukkit.plugin.Plugin;
 
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Tracks PvP combat state per player.
- * Hooks into damage events and velocity application.
  *
- * Threading: event handlers run on main thread.
+ * <p>Fed from the fork itself, not from Bukkit events: {@link ZinthCombatHooks} is called
+ * from {@code LivingEntity.hurtServer} and {@code LivingEntity.knockback}. This class used
+ * to carry {@code @EventHandler} methods, which never fired — Zinth is not a plugin and has
+ * no {@code Plugin} instance to register a listener against, so its only write path was
+ * dead and every context was permanently absent.
+ *
+ * <p>Threading: writes happen on the main thread (both hook sites are inside the tick).
  * ConcurrentHashMap allows lock-free reads from async threads.
  */
-public final class CombatTracker implements Listener, CombatService {
+public final class CombatTracker implements CombatService {
 
     private final ConcurrentHashMap<UUID, CombatContext> contexts = new ConcurrentHashMap<>();
 
@@ -29,7 +26,7 @@ public final class CombatTracker implements Listener, CombatService {
     // -------------------------------------------------------------------------
 
     public void enable() {
-        // No event registration needed — called directly from MinecraftServer
+        // Nothing to arm — the write path is the NMS hook, live for as long as the fork runs.
     }
 
     public void disable() {
@@ -37,7 +34,7 @@ public final class CombatTracker implements Listener, CombatService {
     }
 
     // -------------------------------------------------------------------------
-    // Tick update — called by ZinthTickOrchestrator
+    // Tick update — called from Zinth.tick()
     // -------------------------------------------------------------------------
 
     /**
@@ -47,7 +44,7 @@ public final class CombatTracker implements Listener, CombatService {
     public void tick() {
         long currentTick = Bukkit.getCurrentTick();
         contexts.replaceAll((id, ctx) -> {
-            if (!ctx.isInCombat(currentTick)) {
+            if (ctx.inCombat() && !ctx.isInCombat(currentTick)) {
                 // Reset inCombat but keep history
                 return new CombatContext(
                     ctx.playerId(),
@@ -66,49 +63,62 @@ public final class CombatTracker implements Listener, CombatService {
     }
 
     // -------------------------------------------------------------------------
-    // Event Hooks
+    // Write path — driven by ZinthCombatHooks from the damage pipeline
     // -------------------------------------------------------------------------
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onDamage(EntityDamageByEntityEvent event) {
-        long tick = Bukkit.getCurrentTick();
+    /**
+     * Records one landed hit. Called once damage is proven to have been applied — the Bukkit
+     * damage event was not cancelled and the invulnerability window did not swallow the hit.
+     *
+     * <p>Either id may be {@code null}: a player hitting a mob has no victim id, a player hit
+     * by lava has no attacker id. If both are {@code null} nothing is recorded.
+     *
+     * @param attackerId the player who caused the damage, or {@code null} if it was not a player
+     * @param victimId   the player who took the damage, or {@code null} if it was not a player
+     * @param tick       the server tick the hit landed on
+     */
+    public void onDamageApplied(UUID attackerId, UUID victimId, long tick) {
+        // A player shot by their own arrow, or standing in their own splash potion, is the
+        // causing entity of their own damage. That is not combat with anyone.
+        if (attackerId != null && attackerId.equals(victimId)) {
+            attackerId = null;
+        }
 
-        // Attacker hit someone
-        if (event.getDamager() instanceof Player attacker) {
-            UUID attackerId = attacker.getUniqueId();
-            UUID victimId = event.getEntity().getUniqueId();
+        if (attackerId != null) {
             CombatContext prev = contexts.get(attackerId);
 
-            int combo = 1;
-            if (prev != null && (tick - prev.lastHitGivenTick()) <= CombatContext.COMBO_WINDOW_TICKS) {
-                combo = prev.combo() + 1;
-            }
+            // Swinging at a zombie mid-duel says nothing about who the opponent is, and a null
+            // here would claim there is none — which is worse than a slightly stale answer.
+            // Mobs have no id at this layer, so the previous opponent stands.
+            UUID opponent = victimId != null ? victimId
+                : (prev != null ? prev.lastOpponent() : null);
 
             contexts.put(attackerId, new CombatContext(
                 attackerId,
                 true,
-                victimId,
+                opponent,
                 tick,
                 prev != null ? prev.lastHitTakenTick() : 0L,
                 prev != null ? prev.lastDamageTick() : 0L,
                 prev != null ? prev.lastVelocityAppliedTick() : 0L,
-                combo,
+                comboFor(prev, tick),
                 tick
             ));
         }
 
-        // Victim took damage from a player
-        if (event.getEntity() instanceof Player victim) {
-            UUID victimId = victim.getUniqueId();
-            UUID attackerId = event.getDamager() instanceof Entity e ? e.getUniqueId() : null;
+        if (victimId != null) {
             CombatContext prev = contexts.get(victimId);
 
+            // Damage with no player behind it — fall, lava, starvation, a mob — is not a reason
+            // to forget who you were fighting, and not a reason to re-arm the combat tag. It
+            // records that damage happened and leaves the opponent and the tag alone.
+            boolean fromPlayer = attackerId != null;
             contexts.put(victimId, new CombatContext(
                 victimId,
-                true,
-                attackerId,
+                fromPlayer || (prev != null && prev.inCombat()),
+                fromPlayer ? attackerId : (prev != null ? prev.lastOpponent() : null),
                 prev != null ? prev.lastHitGivenTick() : 0L,
-                tick,
+                fromPlayer ? tick : (prev != null ? prev.lastHitTakenTick() : 0L),
                 tick,
                 prev != null ? prev.lastVelocityAppliedTick() : 0L,
                 prev != null ? prev.combo() : 0,
@@ -117,20 +127,31 @@ public final class CombatTracker implements Listener, CombatService {
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onQuit(PlayerQuitEvent event) {
-        contexts.remove(event.getPlayer().getUniqueId());
+    /**
+     * A combo counts follow-up hits, not entities hit.
+     *
+     * <p>One sweep attack calls this once per entity in range, all on the same tick. Counting
+     * each of them would report a five-hit combo for a single swing — a number an anti-cheat
+     * would read as inhuman click speed.
+     */
+    private static int comboFor(CombatContext prev, long tick) {
+        if (prev == null) return 1;
+        if (prev.lastHitGivenTick() == tick) return Math.max(prev.combo(), 1); // same swing
+        if (tick - prev.lastHitGivenTick() <= CombatContext.COMBO_WINDOW_TICKS) return prev.combo() + 1;
+        return 1;
     }
 
-    // -------------------------------------------------------------------------
-    // Velocity Hook — call this from NMS/packet layer when velocity is applied
-    // -------------------------------------------------------------------------
-
-    public void onVelocityApplied(UUID playerId) {
-        long tick = Bukkit.getCurrentTick();
-        contexts.compute(playerId, (id, prev) -> {
-            if (prev == null) return null;
-            return new CombatContext(
+    /**
+     * Records that knockback was actually written to a player's velocity.
+     *
+     * <p>Creates a context if none exists — knockback can arrive without a preceding damage
+     * hit (sweep attacks, shield-block pushback), and losing those would leave a gap exactly
+     * where knockback verification needs continuity.
+     */
+    public void onVelocityApplied(UUID playerId, long tick) {
+        contexts.compute(playerId, (id, prev) -> prev == null
+            ? new CombatContext(playerId, false, null, 0L, 0L, 0L, tick, 0, tick)
+            : new CombatContext(
                 prev.playerId(),
                 prev.inCombat(),
                 prev.lastOpponent(),
@@ -140,17 +161,16 @@ public final class CombatTracker implements Listener, CombatService {
                 tick,
                 prev.combo(),
                 tick
-            );
-        });
+            ));
+    }
+
+    public void onPlayerQuit(UUID playerId) {
+        contexts.remove(playerId);
     }
 
     // -------------------------------------------------------------------------
     // CombatService impl
     // -------------------------------------------------------------------------
-
-    public void onPlayerQuit(java.util.UUID playerId) {
-        contexts.remove(playerId);
-    }
 
     @Override
     public CombatContext getContext(UUID playerId) {
@@ -167,5 +187,10 @@ public final class CombatTracker implements Listener, CombatService {
     public UUID lastOpponent(UUID playerId) {
         CombatContext ctx = contexts.get(playerId);
         return ctx != null ? ctx.lastOpponent() : null;
+    }
+
+    /** Number of players with a live combat context. Diagnostics and tests. */
+    public int trackedCount() {
+        return contexts.size();
     }
 }

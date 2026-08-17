@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Zinth Dev <dev@zanoria.net>
+Date: Sun, 16 Aug 2026 19:30:09 +0200
+Subject: [PATCH] Zinth: Restore CraftPlayer#disconnect on quit
+
+Patch 0034 replaced this line with the Netty uninject call instead of adding
+the uninject alongside it. CraftPlayer#disconnect abandons open conversations
+and clears the player's permission attachments, so every quit since then has
+left both behind. On the match runtimes, where players cycle through a fresh
+instance per game, that is a leak on the hottest path there is.
+
+diff --git a/net/minecraft/server/players/PlayerList.java b/net/minecraft/server/players/PlayerList.java
+index b34b5a8671546dda2a7876b688e7cc63ec233fa3..260a5a3de2ad2217d8ef77bae00227e4a4d0c6d2 100644
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -447,6 +447,7 @@ public abstract class PlayerList {
+         net.zanoria.zinth.Zinth.get().onPlayerQuit(player.getUUID()); // Zinth
+         net.zanoria.zinth.packet.impl.ZinthChannelInitializer.uninject(
+             player.connection.connection.channel); // Zinth - remove packet handler
++        player.getBukkitEntity().disconnect();
+ 
+         if (this.server.isSameThread()) player.doTick(); // SPIGOT-924 // Paper - Improved watchdog support; don't tick during emergency shutdowns
+         // CraftBukkit end

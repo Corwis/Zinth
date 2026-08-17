@@ -1,5 +1,6 @@
 package net.zanoria.zinth.evidence;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -12,13 +13,9 @@ public record EvidenceDump(
     String meta,
     long dumpTick,
     long dumpNanoTime,
-    EvidenceRingBuffer.Entry[] entries
+    List<EvidenceRingBuffer.Entry> entries
 ) {
     public int entryCount() {
-        int count = 0;
-        for (EvidenceRingBuffer.Entry e : entries) {
-            if (e != null) count++;
-        }
-        return count;
+        return entries.size();
     }
 }

@@ -91,7 +91,6 @@ public final class EvidenceWriter {
                 writer.newLine();
 
                 for (EvidenceRingBuffer.Entry entry : dump.entries()) {
-                    if (entry == null) continue;
                     writer.write(formatEntry(entry));
                     writer.newLine();
                 }

@@ -31,11 +31,10 @@ if (!file(".git").exists()) {
 
 rootProject.name = "paper"
 
-for (name in listOf("paper-api", "paper-server")) {
+for (name in listOf("paper-api", "paper-server", "zinth-api")) {
     include(name)
     file(name).mkdirs()
 }
-
 optionalInclude("test-plugin")
 optionalInclude("paper-generator")
 

@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Zinth Dev <dev@zanoria.net>
+Date: Sun, 16 Aug 2026 20:38:55 +0200
+Subject: [PATCH] Zinth: make the lifecycle hooks null-safe and shut down after
+ the player list drains
+
+Zinth.shutdown() ran twelve lines before playerList.removeAll(), so stopping a
+server with any player online put an IllegalStateException from Zinth.get()
+straight through stopServer() - and 'Saving worlds' was never reached. It also
+skipped the CraftPlayer#disconnect that patch 0035 restored.
+
+Shutdown now happens after the player list has drained, so quit bookkeeping still
+runs for the last players. The three hook sites go through null-safe static entry
+points, so a future reordering cannot do this again.
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 79f1f741814c5b91531dde5b15566bc59cd4c1df..fb51d1ad72f8ace5a7b9a18ec6aeffd3c9f7b9eb 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1016,7 +1016,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         Commands.COMMAND_SENDING_POOL.shutdownNow(); // Paper - Perf: Async command map building; Shutdown and don't bother finishing
+         // CraftBukkit start
+         if (this.server != null) {
+-            net.zanoria.zinth.Zinth.shutdown(); // Zinth - shutdown
+             this.server.spark.disable(); // Paper - spark
+             this.server.disablePlugins();
+             this.server.waitForAsyncTasksShutdown(); // Paper - Wait for Async Tasks during shutdown
+@@ -1031,6 +1030,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             this.playerList.removeAll(this.isRestarting); // Paper
+             try { Thread.sleep(100); } catch (InterruptedException ex) {} // CraftBukkit - SPIGOT-625 - give server at least a chance to send packets
+         }
++        net.zanoria.zinth.Zinth.shutdown(); // Zinth - shutdown, after the player list has drained so quit bookkeeping still runs
+ 
+         LOGGER.info("Saving worlds");
+ 
+@@ -1609,7 +1609,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+ 
+         this.server.spark.tickStart(); // Paper - spark
+         new com.destroystokyo.paper.event.server.ServerTickStartEvent(this.tickCount+1).callEvent(); // Paper - Server Tick Events
+-        net.zanoria.zinth.Zinth.get().tick(); // Zinth - tick orchestration
++        net.zanoria.zinth.Zinth.tickNow(); // Zinth - tick orchestration
+         this.tickCount++;
+         this.tickRateManager.tick();
+         this.tickChildren(hasTimeLeft);
+diff --git a/net/minecraft/server/players/PlayerList.java b/net/minecraft/server/players/PlayerList.java
+index 260a5a3de2ad2217d8ef77bae00227e4a4d0c6d2..a82c2b1ae83295fcf06d41ad5bf8451f1e0fa9a2 100644
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -239,7 +239,7 @@ public abstract class PlayerList {
+ 
+         org.bukkit.event.player.PlayerJoinEvent playerJoinEvent = new org.bukkit.event.player.PlayerJoinEvent(bukkitPlayer, io.papermc.paper.adventure.PaperAdventure.asAdventure(mutableComponent)); // Paper - Adventure
+         this.cserver.getPluginManager().callEvent(playerJoinEvent);
+-        net.zanoria.zinth.Zinth.get().onPlayerJoin(player.getUUID()); // Zinth
++        net.zanoria.zinth.Zinth.playerJoined(player.getUUID()); // Zinth
+         net.zanoria.zinth.packet.impl.ZinthChannelInitializer.inject(
+             player.connection.connection.channel, player.getUUID()); // Zinth - inject packet handler
+ 
+@@ -444,7 +444,7 @@ public abstract class PlayerList {
+ 
+         org.bukkit.event.player.PlayerQuitEvent playerQuitEvent = new org.bukkit.event.player.PlayerQuitEvent(player.getBukkitEntity(), leaveMessage, player.quitReason); // Paper - Adventure & Add API for quit reason
+         this.cserver.getPluginManager().callEvent(playerQuitEvent);
+-        net.zanoria.zinth.Zinth.get().onPlayerQuit(player.getUUID()); // Zinth
++        net.zanoria.zinth.Zinth.playerQuit(player.getUUID()); // Zinth
+         net.zanoria.zinth.packet.impl.ZinthChannelInitializer.uninject(
+             player.connection.connection.channel); // Zinth - remove packet handler
+         player.getBukkitEntity().disconnect();
