@@ -4,7 +4,6 @@ import net.zanoria.zinth.combat.CombatService;
 import net.zanoria.zinth.evidence.EvidenceService;
 import net.zanoria.zinth.packet.PacketBus;
 import net.zanoria.zinth.perf.PerfService;
-import net.zanoria.zinth.shadow.ShadowService;
 import net.zanoria.zinth.snapshot.SnapshotService;
 
 import org.bukkit.Bukkit;
@@ -46,8 +45,7 @@ final class ZinthServiceRegistrar {
             sm.register(PerfService.class,     zinth.perfSampler(),     plugin, ServicePriority.Normal);
             sm.register(EvidenceService.class, zinth.evidenceManager(), plugin, ServicePriority.Normal);
             sm.register(PacketBus.class,       zinth.packetBus(),       plugin, ServicePriority.Normal);
-            sm.register(ShadowService.class,   zinth.shadowManager(),   plugin, ServicePriority.Normal);
-            LOG.info("[Zinth] Registered 6 services in Bukkit ServicesManager (owner=Zinth).");
+            LOG.info("[Zinth] Registered 5 services in Bukkit ServicesManager (owner=Zinth).");
         } catch (Throwable t) {
             // Never let a registration problem take down the server tick loop.
             LOG.warning("[Zinth] Failed to register services in ServicesManager: " + t);

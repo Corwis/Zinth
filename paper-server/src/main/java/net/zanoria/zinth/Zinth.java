@@ -5,7 +5,6 @@ import net.zanoria.zinth.combat.CombatTracker;
 import net.zanoria.zinth.evidence.EvidenceManager;
 import net.zanoria.zinth.packet.PacketBus;
 import net.zanoria.zinth.perf.PerfSampler;
-import net.zanoria.zinth.shadow.ShadowManager;
 import net.zanoria.zinth.snapshot.SnapshotManager;
 
 import java.util.UUID;
@@ -23,7 +22,6 @@ public final class Zinth {
     private final PerfSampler     perfSampler     = new PerfSampler();
     private final EvidenceManager evidenceManager = new EvidenceManager();
     private final PacketBus       packetBus       = new PacketBus();
-    private final ShadowManager   shadowManager   = new ShadowManager();
 
     private Zinth() {}
 
@@ -49,7 +47,7 @@ public final class Zinth {
         combatTracker.enable();
         perfSampler.enable();
         evidenceManager.enable();
-        ZinthServices.init(snapshotManager, combatTracker, perfSampler, evidenceManager, packetBus, shadowManager);
+        ZinthServices.init(snapshotManager, combatTracker, perfSampler, evidenceManager, packetBus);
         // Publish services into the Bukkit ServicesManager so plugins can reach the
         // live managers across the plugin/server class-loader boundary (the static
         // ZinthServices holder is not visible to plugins). boot() runs after plugins
@@ -90,7 +88,6 @@ public final class Zinth {
         snapshotManager.onPlayerQuit(playerId);
         combatTracker.onPlayerQuit(playerId);
         evidenceManager.onPlayerQuit(playerId);
-        shadowManager.onPlayerQuit(playerId);
     }
 
     // -------------------------------------------------------------------------
@@ -102,5 +99,4 @@ public final class Zinth {
     public PerfSampler     perfSampler()     { return perfSampler; }
     public EvidenceManager evidenceManager() { return evidenceManager; }
     public PacketBus       packetBus()       { return packetBus; }
-    public ShadowManager   shadowManager()   { return shadowManager; }
 }

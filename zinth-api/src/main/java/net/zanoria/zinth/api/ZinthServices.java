@@ -4,7 +4,6 @@ import net.zanoria.zinth.combat.CombatService;
 import net.zanoria.zinth.evidence.EvidenceService;
 import net.zanoria.zinth.packet.IPacketBus;
 import net.zanoria.zinth.perf.PerfService;
-import net.zanoria.zinth.shadow.ShadowService;
 import net.zanoria.zinth.snapshot.SnapshotService;
 
 public final class ZinthServices {
@@ -14,17 +13,15 @@ public final class ZinthServices {
     private static PerfService     perf;
     private static EvidenceService evidence;
     private static IPacketBus      packetBus;
-    private static ShadowService   shadow;
 
     private ZinthServices() {}
 
-    public static void init(SnapshotService snapshots, CombatService combat, PerfService perf, EvidenceService evidence, IPacketBus packetBus, ShadowService shadow) {
+    public static void init(SnapshotService snapshots, CombatService combat, PerfService perf, EvidenceService evidence, IPacketBus packetBus) {
         ZinthServices.snapshots = snapshots;
         ZinthServices.combat    = combat;
         ZinthServices.perf      = perf;
         ZinthServices.evidence  = evidence;
         ZinthServices.packetBus = packetBus;
-        ZinthServices.shadow    = shadow;
     }
 
     public static SnapshotService snapshots() { return snapshots; }
@@ -32,5 +29,4 @@ public final class ZinthServices {
     public static PerfService     perf()      { return perf; }
     public static EvidenceService evidence()  { return evidence; }
     public static IPacketBus      packetBus() { return packetBus; }
-    public static ShadowService   shadow()    { return shadow; }
 }
