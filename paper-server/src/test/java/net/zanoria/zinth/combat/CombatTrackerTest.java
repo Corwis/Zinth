@@ -26,6 +26,7 @@ public class CombatTrackerTest {
 
     private static final UUID ATTACKER = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
     private static final UUID VICTIM   = UUID.fromString("00000000-0000-0000-0000-0000000000b2");
+    private static final UUID ZOMBIE   = UUID.fromString("00000000-0000-0000-0000-0000000000e7");
 
     // -------------------------------------------------------------------------
     // Positive
@@ -34,7 +35,7 @@ public class CombatTrackerTest {
     @Test
     public void aLandedHitRecordsBothSides() {
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
 
         CombatContext attacker = tracker.getContext(ATTACKER);
         assertNotNull(attacker, "attacker has no context after landing a hit");
@@ -54,9 +55,9 @@ public class CombatTrackerTest {
     @Test
     public void followUpHitsInsideTheWindowBuildACombo() {
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
-        tracker.onDamageApplied(ATTACKER, VICTIM, 110L); // 10 ticks < COMBO_WINDOW_TICKS (20)
-        tracker.onDamageApplied(ATTACKER, VICTIM, 120L);
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 110L); // 10 ticks < COMBO_WINDOW_TICKS (20)
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 120L);
 
         assertEquals(3, tracker.getContext(ATTACKER).combo());
     }
@@ -64,7 +65,7 @@ public class CombatTrackerTest {
     @Test
     public void aPlayerHittingAMobIsStillTracked() {
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, null, 50L); // victim is a zombie
+        tracker.onDamageApplied(ATTACKER, true, null, false, 50L); // victim is a zombie
 
         CombatContext attacker = tracker.getContext(ATTACKER);
         assertNotNull(attacker);
@@ -76,7 +77,7 @@ public class CombatTrackerTest {
     @Test
     public void knockbackAdvancesTheVelocityTick() {
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
         tracker.onVelocityApplied(VICTIM, 100L);
 
         assertEquals(100L, tracker.getContext(VICTIM).lastVelocityAppliedTick());
@@ -113,9 +114,9 @@ public class CombatTrackerTest {
         // handler did. Falling off a ledge must not make the tracker forget who you were
         // fighting, and must not put a player who was not fighting into combat.
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
 
-        tracker.onDamageApplied(null, VICTIM, 105L); // fall damage
+        tracker.onDamageApplied(null, false, VICTIM, true, 105L); // fall damage
         CombatContext ctx = tracker.getContext(VICTIM);
         assertEquals(ATTACKER, ctx.lastOpponent(), "environmental damage erased the opponent");
         assertTrue(ctx.inCombat(), "an already-fighting player left combat because of fall damage");
@@ -124,16 +125,43 @@ public class CombatTrackerTest {
     }
 
     @Test
-    public void hittingAMobMidDuelDoesNotEraseTheOpponent() {
-        // The mob has no id at this layer, so writing it through would claim "no opponent" —
-        // a false statement, where the stale one is at least true of the last player fight.
+    public void hittingAMobRecordsTheMobAsOpponent() {
+        // Measured on the live server 2026-08-20: one /damage against a zombie left
+        // lastOpponent=null, because the hook discarded every id that was not a ServerPlayer.
+        // "null" reads as "nothing happened" when in fact a mob happened.
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
-        tracker.onDamageApplied(ATTACKER, null, 105L); // swings at a passing zombie
+        tracker.onDamageApplied(ATTACKER, true, ZOMBIE, false, 100L);
 
-        assertEquals(VICTIM, tracker.getContext(ATTACKER).lastOpponent(),
-            "hitting a mob erased the duel opponent");
-        assertEquals(105L, tracker.getContext(ATTACKER).lastHitGivenTick());
+        CombatContext ctx = tracker.getContext(ATTACKER);
+        assertEquals(ZOMBIE, ctx.lastOpponent(), "the mob was not recorded as opponent");
+        assertFalse(ctx.lastOpponentIsPlayer(), "a zombie was reported as a player");
+        assertTrue(ctx.inCombat());
+        assertEquals(1, tracker.trackedCount(), "only the player gets a context");
+    }
+
+    @Test
+    public void aMobHittingAPlayerIsCombatTooButNotPvP() {
+        CombatTracker tracker = new CombatTracker();
+        tracker.onDamageApplied(ZOMBIE, false, VICTIM, true, 200L);
+
+        CombatContext ctx = tracker.getContext(VICTIM);
+        assertEquals(ZOMBIE, ctx.lastOpponent());
+        assertFalse(ctx.lastOpponentIsPlayer(), "a mob must not pass as a player opponent");
+        assertTrue(ctx.inCombat(), "a mob beating a player is combat");
+        assertEquals(200L, ctx.lastHitTakenTick());
+    }
+
+    @Test
+    public void aTickFieldHoldsATickNotACount() {
+        // The value that was misread on 2026-08-20: hitGiven=21927 after ONE /damage looks like
+        // a hit count. It is the tick the hit landed on, and it must equal the tick passed in.
+        CombatTracker tracker = new CombatTracker();
+        tracker.onDamageApplied(ATTACKER, true, ZOMBIE, false, 25883L);
+
+        CombatContext ctx = tracker.getContext(ATTACKER);
+        assertEquals(25883L, ctx.lastHitGivenTick(), "lastHitGivenTick is not the tick of the hit");
+        assertEquals(25883L, ctx.tick());
+        assertEquals(1, ctx.combo(), "one hit is combo 1 — that is the count field");
     }
 
     @Test
@@ -141,9 +169,9 @@ public class CombatTrackerTest {
         // Fire Aspect is standard PvP gear: A ignites B, then B's own burn ticks arrive with no
         // attacker. The enchantment A used would otherwise erase A's own attribution.
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, VICTIM, 200L);
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 200L);
         for (long burn = 220L; burn <= 300L; burn += 20L) {
-            tracker.onDamageApplied(null, VICTIM, burn);
+            tracker.onDamageApplied(null, false, VICTIM, true, burn);
         }
 
         CombatContext ctx = tracker.getContext(VICTIM);
@@ -158,9 +186,9 @@ public class CombatTrackerTest {
         // in a cactus was permanently "in combat" with nobody.
         try (MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class)) {
             CombatTracker tracker = new CombatTracker();
-            tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
+            tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
             for (long t = 110L; t <= 400L; t += 10L) {
-                tracker.onDamageApplied(null, VICTIM, t); // cactus, every 10 ticks, forever
+                tracker.onDamageApplied(null, false, VICTIM, true, t); // cactus, every 10 ticks, forever
             }
 
             bukkit.when(Bukkit::getCurrentTick).thenReturn(400);
@@ -173,7 +201,7 @@ public class CombatTrackerTest {
     @Test
     public void environmentalDamageAloneDoesNotStartCombat() {
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(null, VICTIM, 40L); // stood in lava, never fought
+        tracker.onDamageApplied(null, false, VICTIM, true, 40L); // stood in lava, never fought
 
         CombatContext ctx = tracker.getContext(VICTIM);
         assertNotNull(ctx);
@@ -184,7 +212,7 @@ public class CombatTrackerTest {
     @Test
     public void aPlayerHurtByTheirOwnArrowIsNotTheirOwnOpponent() {
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(VICTIM, VICTIM, 60L);
+        tracker.onDamageApplied(VICTIM, true, VICTIM, true, 60L);
 
         CombatContext ctx = tracker.getContext(VICTIM);
         assertNull(ctx.lastOpponent(), "a player became their own last opponent");
@@ -197,28 +225,28 @@ public class CombatTrackerTest {
         // A sweep calls the hook once per entity in range, all on the same tick. Counting each
         // of them reports a five-hit combo for one swing — inhuman click speed to any reader.
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
         UUID second = UUID.fromString("00000000-0000-0000-0000-0000000000c9");
-        tracker.onDamageApplied(ATTACKER, second, 100L);
-        tracker.onDamageApplied(ATTACKER, null, 100L);
+        tracker.onDamageApplied(ATTACKER, true, second, true, 100L);
+        tracker.onDamageApplied(ATTACKER, true, null, false, 100L);
         assertEquals(1, tracker.getContext(ATTACKER).combo(), "one swing counted as three hits");
 
-        tracker.onDamageApplied(ATTACKER, VICTIM, 110L); // a real follow-up
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 110L); // a real follow-up
         assertEquals(2, tracker.getContext(ATTACKER).combo());
     }
 
     @Test
     public void damageInvolvingNoPlayerRecordsNothing() {
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(null, null, 10L);
+        tracker.onDamageApplied(null, false, null, false, 10L);
         assertEquals(0, tracker.trackedCount());
     }
 
     @Test
     public void aHitOutsideTheComboWindowRestartsTheCombo() {
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
-        tracker.onDamageApplied(ATTACKER, VICTIM, 121L); // 21 ticks > COMBO_WINDOW_TICKS (20)
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 121L); // 21 ticks > COMBO_WINDOW_TICKS (20)
 
         assertEquals(1, tracker.getContext(ATTACKER).combo());
     }
@@ -227,7 +255,7 @@ public class CombatTrackerTest {
     public void combatDecaysAfterTheTimeout() {
         try (MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class)) {
             CombatTracker tracker = new CombatTracker();
-            tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
+            tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
 
             bukkit.when(Bukkit::getCurrentTick).thenReturn(150); // 50 < COMBAT_TIMEOUT_TICKS (80)
             tracker.tick();
@@ -250,7 +278,7 @@ public class CombatTrackerTest {
         // tick, forever — 20 allocations per second per player who had ever fought.
         try (MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class)) {
             CombatTracker tracker = new CombatTracker();
-            tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
+            tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
 
             bukkit.when(Bukkit::getCurrentTick).thenReturn(300);
             tracker.tick();
@@ -266,7 +294,7 @@ public class CombatTrackerTest {
     @Test
     public void quitDropsTheContext() {
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
         assertEquals(2, tracker.trackedCount());
 
         tracker.onPlayerQuit(ATTACKER);
@@ -277,7 +305,7 @@ public class CombatTrackerTest {
     @Test
     public void disableClearsEverything() {
         CombatTracker tracker = new CombatTracker();
-        tracker.onDamageApplied(ATTACKER, VICTIM, 100L);
+        tracker.onDamageApplied(ATTACKER, true, VICTIM, true, 100L);
         tracker.disable();
         assertEquals(0, tracker.trackedCount());
     }

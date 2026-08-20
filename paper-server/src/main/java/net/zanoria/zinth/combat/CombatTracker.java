@@ -50,6 +50,7 @@ public final class CombatTracker implements CombatService {
                     ctx.playerId(),
                     false,
                     ctx.lastOpponent(),
+                    ctx.lastOpponentIsPlayer(),
                     ctx.lastHitGivenTick(),
                     ctx.lastHitTakenTick(),
                     ctx.lastDamageTick(),
@@ -70,33 +71,38 @@ public final class CombatTracker implements CombatService {
      * Records one landed hit. Called once damage is proven to have been applied — the Bukkit
      * damage event was not cancelled and the invulnerability window did not swallow the hit.
      *
-     * <p>Either id may be {@code null}: a player hitting a mob has no victim id, a player hit
-     * by lava has no attacker id. If both are {@code null} nothing is recorded.
+     * <p>Ids are those of the entities involved, player or not; {@code null} means there was no
+     * entity on that side at all (fall, lava, starvation). The two flags say whose context is
+     * written — only players get one — while the ids are what {@code lastOpponent} records.
+     * Keeping those apart is the point: a zombie has an id worth storing even though it never
+     * gets a context of its own.
      *
-     * @param attackerId the player who caused the damage, or {@code null} if it was not a player
-     * @param victimId   the player who took the damage, or {@code null} if it was not a player
-     * @param tick       the server tick the hit landed on
+     * @param attackerId       the entity that caused the damage, or {@code null} for environment
+     * @param attackerIsPlayer whether that entity is a player, i.e. whether it gets a context
+     * @param victimId         the entity that took the damage, or {@code null}
+     * @param victimIsPlayer   whether that entity is a player, i.e. whether it gets a context
+     * @param tick             the server tick the hit landed on
      */
-    public void onDamageApplied(UUID attackerId, UUID victimId, long tick) {
+    public void onDamageApplied(UUID attackerId, boolean attackerIsPlayer,
+                                UUID victimId, boolean victimIsPlayer, long tick) {
         // A player shot by their own arrow, or standing in their own splash potion, is the
         // causing entity of their own damage. That is not combat with anyone.
         if (attackerId != null && attackerId.equals(victimId)) {
             attackerId = null;
+            attackerIsPlayer = false;
         }
 
-        if (attackerId != null) {
+        if (attackerIsPlayer) {
             CombatContext prev = contexts.get(attackerId);
 
-            // Swinging at a zombie mid-duel says nothing about who the opponent is, and a null
-            // here would claim there is none — which is worse than a slightly stale answer.
-            // Mobs have no id at this layer, so the previous opponent stands.
-            UUID opponent = victimId != null ? victimId
-                : (prev != null ? prev.lastOpponent() : null);
-
+            // The opponent is whatever was hit — a mob counts. Only environmental damage, which
+            // has no entity on the other side at all, leaves the previous opponent standing.
+            boolean hasOpponent = victimId != null;
             contexts.put(attackerId, new CombatContext(
                 attackerId,
                 true,
-                opponent,
+                hasOpponent ? victimId : (prev != null ? prev.lastOpponent() : null),
+                hasOpponent ? victimIsPlayer : (prev != null && prev.lastOpponentIsPlayer()),
                 tick,
                 prev != null ? prev.lastHitTakenTick() : 0L,
                 prev != null ? prev.lastDamageTick() : 0L,
@@ -106,19 +112,21 @@ public final class CombatTracker implements CombatService {
             ));
         }
 
-        if (victimId != null) {
+        if (victimIsPlayer) {
             CombatContext prev = contexts.get(victimId);
 
-            // Damage with no player behind it — fall, lava, starvation, a mob — is not a reason
-            // to forget who you were fighting, and not a reason to re-arm the combat tag. It
-            // records that damage happened and leaves the opponent and the tag alone.
-            boolean fromPlayer = attackerId != null;
+            // Damage with no entity behind it — fall, lava, starvation, a burn someone else lit —
+            // is not a reason to forget who you were fighting and not a reason to arm the combat
+            // tag. It records that damage happened and leaves the rest alone. A mob IS an entity,
+            // so it does arm the tag: being beaten by a zombie is being in combat.
+            boolean fromEntity = attackerId != null;
             contexts.put(victimId, new CombatContext(
                 victimId,
-                fromPlayer || (prev != null && prev.inCombat()),
-                fromPlayer ? attackerId : (prev != null ? prev.lastOpponent() : null),
+                fromEntity || (prev != null && prev.inCombat()),
+                fromEntity ? attackerId : (prev != null ? prev.lastOpponent() : null),
+                fromEntity ? attackerIsPlayer : (prev != null && prev.lastOpponentIsPlayer()),
                 prev != null ? prev.lastHitGivenTick() : 0L,
-                fromPlayer ? tick : (prev != null ? prev.lastHitTakenTick() : 0L),
+                fromEntity ? tick : (prev != null ? prev.lastHitTakenTick() : 0L),
                 tick,
                 prev != null ? prev.lastVelocityAppliedTick() : 0L,
                 prev != null ? prev.combo() : 0,
@@ -150,11 +158,12 @@ public final class CombatTracker implements CombatService {
      */
     public void onVelocityApplied(UUID playerId, long tick) {
         contexts.compute(playerId, (id, prev) -> prev == null
-            ? new CombatContext(playerId, false, null, 0L, 0L, 0L, tick, 0, tick)
+            ? new CombatContext(playerId, false, null, false, 0L, 0L, 0L, tick, 0, tick)
             : new CombatContext(
                 prev.playerId(),
                 prev.inCombat(),
                 prev.lastOpponent(),
+                prev.lastOpponentIsPlayer(),
                 prev.lastHitGivenTick(),
                 prev.lastHitTakenTick(),
                 prev.lastDamageTick(),

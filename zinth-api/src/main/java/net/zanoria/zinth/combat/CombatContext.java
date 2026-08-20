@@ -10,8 +10,21 @@ public record CombatContext(
     UUID playerId,
 
     boolean inCombat,
+
+    /**
+     * The entity on the other side of the last hit — a player or a mob.
+     *
+     * <p>{@code null} only when nothing was on the other side: fall damage, lava, starvation.
+     * It used to be {@code null} for mobs too, because the hook discarded every id that was not
+     * a {@code ServerPlayer} — so a player who had just hit a zombie reported no opponent at
+     * all, which reads like "nothing happened" rather than "a mob happened".
+     */
     UUID lastOpponent,
 
+    /** Whether {@link #lastOpponent} is a player. False for mobs and when there is no opponent. */
+    boolean lastOpponentIsPlayer,
+
+    /** Server tick of the last hit dealt — a tick number, not a count. */
     long lastHitGivenTick,
     long lastHitTakenTick,
     long lastDamageTick,

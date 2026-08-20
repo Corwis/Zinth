@@ -93,6 +93,13 @@ public final class ZinthCommand extends Command {
         return true;
     }
 
+    /** Renders a stored tick as its age, so nobody reads a tick number as a count again. */
+    private static String age(long tick, long now) {
+        if (tick <= 0L) return " (nie)";
+        long delta = now - tick;
+        return " (vor " + delta + " Ticks / " + MS.format(delta / 20.0) + " s)";
+    }
+
     private boolean combat(CommandSender sender, CombatTracker tracker, String name) {
         if (name == null) {
             sender.sendMessage("Usage: /zinth combat <player>");
@@ -110,11 +117,19 @@ public final class ZinthCommand extends Command {
             return true;
         }
         sender.sendMessage("Combat context for " + name);
+        long now = Bukkit.getCurrentTick();
         sender.sendMessage("  inCombat=" + ctx.inCombat() + " (live=" + tracker.isInCombat(id) + ")");
-        sender.sendMessage("  lastOpponent=" + ctx.lastOpponent());
-        sender.sendMessage("  hitGiven=" + ctx.lastHitGivenTick() + " hitTaken=" + ctx.lastHitTakenTick());
-        sender.sendMessage("  velocityApplied=" + ctx.lastVelocityAppliedTick() + " combo=" + ctx.combo());
-        sender.sendMessage("  tick=" + ctx.tick() + " now=" + Bukkit.getCurrentTick());
+        sender.sendMessage("  lastOpponent=" + ctx.lastOpponent()
+            + (ctx.lastOpponent() == null ? " (kein Gegner)"
+               : ctx.lastOpponentIsPlayer() ? " (Spieler)" : " (kein Spieler)"));
+        // Every value below is a TICK NUMBER, not a count. Printing the bare number invited
+        // exactly one misreading: "hitGiven=21927" read as 21927 hits after a single /damage.
+        sender.sendMessage("  hitGivenTick="  + ctx.lastHitGivenTick()  + age(ctx.lastHitGivenTick(), now)
+            + "  hitTakenTick=" + ctx.lastHitTakenTick() + age(ctx.lastHitTakenTick(), now));
+        sender.sendMessage("  velocityTick="  + ctx.lastVelocityAppliedTick() + age(ctx.lastVelocityAppliedTick(), now)
+            + "  damageTick=" + ctx.lastDamageTick() + age(ctx.lastDamageTick(), now));
+        sender.sendMessage("  combo=" + ctx.combo() + " (Treffer in Folge)"
+            + "   updatedTick=" + ctx.tick() + age(ctx.tick(), now) + "  now=" + now);
 
         PlayerSnapshot snapshot = Zinth.get().snapshotManager().getCurrent(id);
         if (snapshot != null) {

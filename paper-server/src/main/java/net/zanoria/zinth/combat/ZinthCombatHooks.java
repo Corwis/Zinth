@@ -66,14 +66,19 @@ public final class ZinthCombatHooks {
             if (tracker == null) return; // Zinth not booted
 
             Entity attacker = source.getEntity();
-            UUID attackerId = attacker instanceof ServerPlayer ? attacker.getUUID() : null;
-            UUID victimId   = victim   instanceof ServerPlayer ? victim.getUUID()   : null;
-            if (attackerId == null && victimId == null) return; // mob on mob — not our business
+            boolean attackerIsPlayer = attacker instanceof ServerPlayer;
+            boolean victimIsPlayer   = victim   instanceof ServerPlayer;
+            if (!attackerIsPlayer && !victimIsPlayer) return; // mob on mob — not our business
+
+            // The ids go through even for mobs. Discarding them was a real loss: a player who had
+            // just hit a zombie reported lastOpponent=null, which reads as "nothing happened".
+            UUID attackerId = attacker != null ? attacker.getUUID() : null;
+            UUID victimId   = victim.getUUID();
 
             long tick = MinecraftServer.currentTick;
-            tracker.onDamageApplied(attackerId, victimId, tick);
+            tracker.onDamageApplied(attackerId, attackerIsPlayer, victimId, victimIsPlayer, tick);
 
-            if (attackerId != null && victimId != null) {
+            if (attackerIsPlayer && victimIsPlayer) {
                 EvidenceService evidence = ZinthServices.evidence();
                 if (evidence != null) evidence.captureAttack(attackerId, victimId, tick);
             }
