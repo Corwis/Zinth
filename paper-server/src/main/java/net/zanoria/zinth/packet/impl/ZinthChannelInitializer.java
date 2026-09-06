@@ -18,7 +18,9 @@ public final class ZinthChannelInitializer {
     public static void inject(Channel channel, UUID playerId) {
         ChannelPipeline pipeline = channel.pipeline();
 
-        // ExploitGuard sits BEFORE the packet decoder
+        // ExploitGuard sits BEFORE the decoder, where only raw frames exist: size and frame
+        // rate. Per-type limits belong to ZinthChannelHandler below — a type check here can
+        // never match, which is exactly how the move and attack limits came to guard nothing.
         if (pipeline.get(ExploitProtection.HANDLER_NAME) == null) {
             pipeline.addBefore("decoder", ExploitProtection.HANDLER_NAME,
                 new ExploitGuard(playerId));

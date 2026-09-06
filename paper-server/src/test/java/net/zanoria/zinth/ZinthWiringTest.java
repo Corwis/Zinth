@@ -163,6 +163,50 @@ public class ZinthWiringTest {
                 + "would contain no knockback");
     }
 
+    /**
+     * The guard before the decoder must not ask about packet types.
+     *
+     * <p>It did, for as long as it existed: {@code instanceof ServerboundMovePlayerPacket} and
+     * {@code ServerboundInteractPacket} in a handler installed with
+     * {@code addBefore("decoder", …)}, where every message is a raw {@code ByteBuf}. The checks
+     * could not match, so the 40/s and 30/s limits guarded nothing and every frame fell into one
+     * generic bucket. Nothing failed — a type check that never matches is silent.
+     */
+    @Test
+    public void theGuardBeforeTheDecoderDoesNotAskForPacketTypes() {
+        for (String type : List.of("net/minecraft/network/protocol/game/ServerboundMovePlayerPacket",
+                                   "net/minecraft/network/protocol/game/ServerboundInteractPacket")) {
+            assertFalse(referencesType("net/zanoria/zinth/exploit/ExploitGuard", type),
+                "ExploitGuard names " + type + ", but it runs before the decoder where only raw "
+                    + "frames exist — the check can never match");
+        }
+    }
+
+    /** …and the handler that runs after the decoder is where those limits belong. */
+    @Test
+    public void thePerTypeLimitsRunAfterTheDecoder() {
+        assertTrue(callsAnywhere("net/zanoria/zinth/packet/impl/ZinthChannelHandler",
+                "net/zanoria/zinth/exploit/PacketRateLimiter", "allow"),
+            "ZinthChannelHandler no longer enforces the per-type rate limits — after moving them "
+                + "out of ExploitGuard, nothing would enforce them at all");
+    }
+
+    /**
+     * Both Netty handlers hold per-connection state and are constructed per connection.
+     * {@code @Sharable} switches off Netty's guard against adding one instance to two pipelines,
+     * which is the only thing that would catch that mistake.
+     */
+    @Test
+    public void theConnectionScopedHandlersAreNotMarkedSharable() {
+        for (String handler : List.of("net/zanoria/zinth/exploit/ExploitGuard",
+                                      "net/zanoria/zinth/packet/impl/ZinthChannelHandler")) {
+            ClassNode node = read(handler);
+            boolean sharable = node.visibleAnnotations != null && node.visibleAnnotations.stream()
+                .anyMatch(a -> a.desc.equals("Lio/netty/channel/ChannelHandler$Sharable;"));
+            assertFalse(sharable, handler + " claims @Sharable but holds per-connection state");
+        }
+    }
+
     // -------------------------------------------------------------------------
     // The ServicesManager contract
     // -------------------------------------------------------------------------
@@ -269,6 +313,25 @@ public class ZinthWiringTest {
     private static boolean callsAnywhere(String ownerInternalName, String calleeOwner, String calleeMethod) {
         for (MethodNode method : read(ownerInternalName).methods) {
             if (invokes(method, calleeOwner, calleeMethod)) return true;
+        }
+        return false;
+    }
+
+    /** True if the class mentions the given type anywhere in its constant pool usage. */
+    private static boolean referencesType(String ownerInternalName, String typeInternalName) {
+        ClassNode node = read(ownerInternalName);
+        String desc = "L" + typeInternalName + ";";
+        for (MethodNode method : node.methods) {
+            for (AbstractInsnNode insn : method.instructions) {
+                if (insn instanceof org.objectweb.asm.tree.TypeInsnNode type
+                    && type.desc.equals(typeInternalName)) {
+                    return true;
+                }
+                if (insn instanceof MethodInsnNode call
+                    && (call.owner.equals(typeInternalName) || call.desc.contains(desc))) {
+                    return true;
+                }
+            }
         }
         return false;
     }
