@@ -18,9 +18,20 @@ public final class ZinthChannelInitializer {
     public static void inject(Channel channel, UUID playerId) {
         ChannelPipeline pipeline = channel.pipeline();
 
-        // ExploitGuard sits BEFORE the decoder, where only raw frames exist: size and frame
-        // rate. Per-type limits belong to ZinthChannelHandler below — a type check here can
-        // never match, which is exactly how the move and attack limits came to guard nothing.
+        // ⚠️ ExploitGuard MUST stay before the decoder. Do not "fix" it by moving it.
+        //
+        // The tempting move is real: this handler used to check `msg instanceof
+        // ServerboundMovePlayerPacket`, which cannot match here, so the obvious repair looks
+        // like addBefore("packet_handler", ...). That trade is a loss. The decoder is where the
+        // expensive work happens — allocating and parsing the frame, NBT included — and a guard
+        // that runs after it has already paid for the attack it was built to refuse. Rejecting a
+        // 2 MiB frame here costs a length comparison; rejecting it after the decoder costs the
+        // decode. Decode-DoS is the whole reason this handler exists.
+        //
+        // So the question was split rather than moved: size and frame rate stay here, where a
+        // raw frame can answer them. The per-type limits (40/s move, 30/s attack) live in
+        // ZinthChannelHandler below, which runs after the decoder and can see a type. A type
+        // check in THIS handler is always dead code — ZinthWiringTest fails if one reappears.
         if (pipeline.get(ExploitProtection.HANDLER_NAME) == null) {
             pipeline.addBefore("decoder", ExploitProtection.HANDLER_NAME,
                 new ExploitGuard(playerId));
